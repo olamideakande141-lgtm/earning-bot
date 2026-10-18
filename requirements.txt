@@ -1,1 +1,5 @@
+
+Flask
+pyTelegramBotAPI
 psycopg[binary]
+gunicorn
