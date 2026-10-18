@@ -1,6 +1,4 @@
-
-Flask
-pyTelegramBotAPI
-psycopg[binary]
-gunicorn
+python-telegram-bot==20.7
+Flask==3.0.0
+psycopg[binary]==3.1.13
 
