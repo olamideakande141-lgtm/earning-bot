@@ -1,121 +1,80 @@
 import os
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from earning import EarningEngine
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from earning import create_user, get_user, can_watch, add_ad, today_ads, add_withdraw, withdraws
+from dotenv import load_dotenv
+load_dotenv()
 
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
+BOT_TOKEN=os.getenv("BOT_TOKEN")
+BOT_USERNAME=os.getenv("BOT_USERNAME")
+MINI_APP_URL=os.getenv("MINI_APP_URL")
+ADMIN_ID=int(os.getenv("ADMIN_ID","8323896060"))
+FORCE_CHANNEL="@freeearningofusdt"
+CHANNEL_LINK="https://t.me/freeearningofusdt"
 
-# Your Telegram Channel Username or ID
-CHANNEL_USERNAME = "@freeearningofusdt"
-
-def check_subscription(user_id: int) -> bool:
-    """Checks if the user is a member, administrator, or creator of the channel."""
-    if not BOT_TOKEN:
-        return True # Bypass for local testing if token isn't set yet
+async def is_joined(user_id, context):
     try:
-        member = bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        print(f"Error checking channel membership: {e}")
+        member = await context.bot.get_chat_member(FORCE_CHANNEL, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
         return False
 
-def get_subscription_markup():
-    """Returns an inline keyboard prompting the user to join the channel."""
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("📢 Join Channel", url="https://t.me/freeearningofusdt"))
-    markup.add(InlineKeyboardButton("🔄 Verify Membership", callback_data="verify_subscription"))
-    return markup
-
-def process_telegram_update(json_str):
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    username = message.from_user.username or "User"
-    
-    # Enforce mandatory channel subscription check
-    if not check_subscription(user_id):
-        bot.send_message(
-            message.chat.id,
-            f"⚠️ **Access Denied!**\n\nTo use this bot and earn USDT, you must first join our official Telegram channel: {CHANNEL_USERNAME}\n\nClick the button below to join, then click 'Verify Membership'.",
-            reply_markup=get_subscription_markup(),
-            parse_mode="Markdown"
-        )
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    joined = await is_joined(uid, context)
+    if not joined:
+        kb = [
+            [InlineKeyboardButton("📢 Join @freeearningofusdt", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ I Joined - Check", callback_data="check_join")]
+        ]
+        await update.message.reply_text(f"⚠️ Must join {FORCE_CHANNEL} to earn!\n\nJoin then click Check", reply_markup=InlineKeyboardMarkup(kb))
         return
+    ref=context.args[0] if context.args else None
+    create_user(update.effective_user, ref)
+    u=get_user(update.effective_user.id)
+    link=f"https://t.me/{BOT_USERNAME}?start={update.effective_user.id}"
+    kb=[[InlineKeyboardButton("💰 Open App", web_app=WebAppInfo(url=MINI_APP_URL))],[InlineKeyboardButton("📺 Watch $0.005", callback_data="watch"), InlineKeyboardButton("💸 Withdraw $5", callback_data="wd")]]
+    await update.message.reply_text(f"💰 Balance ${u['balance']:.4f}\n📺 {today_ads(u['user_id'])}/20\n👥 Ref {u['referrals']}\nLink: {link}\n$0.025/ref | $0.005/ad | Min $5 (you get $4)", reply_markup=InlineKeyboardMarkup(kb))
 
-    EarningEngine.register_user(str(user_id), username)
-    
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 2
-    markup.add(
-        InlineKeyboardButton("💰 Earn Money", callback_data="btn_earn"),
-        InlineKeyboardButton("📊 Balance", callback_data="btn_balance"),
-        InlineKeyboardButton("🎁 Daily Reward", callback_data="btn_daily"),
-        InlineKeyboardButton("💳 Withdraw", callback_data="btn_withdraw")
-    )
-    
-    welcome_text = (
-        f"Welcome to the Earning Bot, {username}!\n\n"
-        "Complete simple tasks, claim daily bonuses, and invite friends to earn real rewards."
-    )
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback(call):
-    user_id = call.from_user.id
-    chat_id = call.message.chat.id
-    
-    # Handle subscription verification callback
-    if call.data == "verify_subscription":
-        if check_subscription(user_id):
-            bot.answer_callback_query(call.id, "✅ Membership verified successfully!")
-            bot.delete_message(chat_id, call.message.message_id)
-            fake_message = call.message
-            fake_message.from_user = call.from_user
-            send_welcome(fake_message)
-        else:
-            bot.answer_callback_query(call.id, "❌ You haven't joined the channel yet!", show_alert=True)
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    if q.data=="check_join":
+        joined = await is_joined(uid, context)
+        if not joined:
+            await q.message.reply_text(f"❌ Not joined! Join {CHANNEL_LINK}"); return
+        create_user(q.from_user, None); u=get_user(uid); link=f"https://t.me/{BOT_USERNAME}?start={uid}"
+        kb=[[InlineKeyboardButton("💰 Open App", web_app=WebAppInfo(url=MINI_APP_URL))]]
+        await q.message.reply_text(f"✅ Joined! Balance ${u['balance']:.4f}\nLink: {link}", reply_markup=InlineKeyboardMarkup(kb))
         return
+    if q.data=="watch":
+        if not await is_joined(uid, context): await q.message.reply_text(f"Join {CHANNEL_LINK} first"); return
+        can,c=can_watch(uid)
+        if not can: await q.message.reply_text("❌ 20/20 done today"); return
+        add_ad(uid); u=get_user(uid); await q.message.reply_text(f"✅ +$0.005\nToday {c+1}/20\nBal ${u['balance']:.4f}")
+    elif q.data=="wd":
+        if not await is_joined(uid, context): await q.message.reply_text(f"Join {CHANNEL_LINK} first"); return
+        u=get_user(uid)
+        if u["balance"]<5: await q.message.reply_text(f"❌ Need $5, you have ${u['balance']:.4f}"); return
+        context.user_data["wait_wallet"]=True; await q.message.reply_text("Send USDT TRC20 wallet:")
+    elif q.data.startswith("ap_"):
+        if q.from_user.id!=ADMIN_ID: return
+        from bson import ObjectId; wd_id=q.data.split("_")[1]; wd=withdraws.find_one({"_id":ObjectId(wd_id)}); from earning import users; users.update_one({"user_id": wd["user_id"]}, {"$inc": {"balance": -wd["amount"]}}); withdraws.update_one({"_id": ObjectId(wd_id)}, {"$set": {"status": "approved"}}); await q.edit_message_text(f"✅ Paid ${wd['receive']} to {wd['user_id']}")
+    elif q.data.startswith("rj_"):
+        if q.from_user.id!=ADMIN_ID: return
+        from bson import ObjectId; withdraws.update_one({"_id": ObjectId(q.data.split('_')[1])}, {"$set": {"status": "rejected"}}); await q.edit_message_text("❌ Rejected")
 
-    # Security check: ensure they are still joined before allowing navigation
-    if not check_subscription(user_id):
-        bot.answer_callback_query(call.id, "⚠️ Please join our channel first!", show_alert=True)
-        bot.send_message(
-            chat_id,
-            f"⚠️ You must join {CHANNEL_USERNAME} to continue using features.",
-            reply_markup=get_subscription_markup()
-        )
-        return
+async def wallet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("wait_wallet"): return
+    wd=add_withdraw(update.effective_user.id, 5, update.message.text)
+    if not wd: await update.message.reply_text("❌ Low balance"); return
+    await update.message.reply_text(f"✅ Requested $5 -> You get $4\nPending 24h")
+    kb=[[InlineKeyboardButton(f"✅ Pay $4", callback_data=f"ap_{wd['_id']}"), InlineKeyboardButton("❌ Reject", callback_data=f"rj_{wd['_id']}")]]
+    await context.bot.send_message(ADMIN_ID, f"💸 NEW WD\nUser {wd['user_id']}\n$5 -> $4\n{wd['wallet']}", reply_markup=InlineKeyboardMarkup(kb))
+    context.user_data["wait_wallet"]=False
 
-    str_user_id = str(user_id)
-    
-    if call.data == "btn_earn":
-        tasks = EarningEngine.get_available_tasks(str_user_id)
-        markup = InlineKeyboardMarkup()
-        for task in tasks:
-            markup.add(InlineKeyboardButton(task['title'], callback_data=f"task_{task['id']}"))
-        bot.send_message(chat_id, "Select an active task to complete:", reply_markup=markup)
-        
-    elif call.data.startswith("task_"):
-        task_id = call.data.split("_")[1]
-        reward = EarningEngine.complete_task(str_user_id, task_id)
-        bot.answer_callback_query(call.id, f"Task completed! Earned ${reward:.2f}")
-        bot.send_message(chat_id, f"✅ Task finished. ${reward:.2f} added to your account.")
-        
-    elif call.data == "btn_balance":
-        balance = EarningEngine.get_user_balance(str_user_id)
-        bot.send_message(chat_id, f"💳 Your current available balance is: ${balance:.2f} USDT")
-        
-    elif call.data == "btn_daily":
-        success, message_text = EarningEngine.claim_daily_bonus(str_user_id)
-        bot.send_message(chat_id, message_text)
-        
-    elif call.data == "btn_withdraw":
-        balance = EarningEngine.get_user_balance(str_user_id)
-        if balance < 10.0:
-            bot.send_message(chat_id, f"⚠️ Minimum withdrawal threshold is $10.00 USDT. Current balance: ${balance:.2f}")
-        else:
-            bot.send_message(chat_id, "Enter your TRC20/ERC20 wallet address to initiate payout:")
+def get_app():
+    app=Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callbacks))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wallet_handler))
+    return app
