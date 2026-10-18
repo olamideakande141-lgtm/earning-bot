@@ -12,10 +12,24 @@ import asyncio
 # Your earning logic
 from earning import (
     init_earning_tables, register_user, get_balance, 
-    get_daily_ad_count, can_watch_ad, credit_verified_ad,
-    request_withdrawal, DAILY_AD_LIMIT, AD_REWARD,
+    credit_verified_ad, request_withdrawal,
+    DAILY_AD_LIMIT, AD_REWARD,
     MIN_WITHDRAWAL, REFERRAL_REWARD, SUPPORTED_NETWORKS
 )
+import earning as earning_module
+
+def get_daily_ad_count(user_id):
+    # Try both possible names
+    if hasattr(earning_module, 'get_daily_ad_count'):
+        return earning_module.get_daily_ad_count(user_id)
+    if hasattr(earning_module, 'get_daily_counts'):
+        return earning_module.get_daily_counts(user_id)
+    return 0
+
+def can_watch_ad(user_id):
+    if hasattr(earning_module, 'can_watch_ad'):
+        return earning_module.can_watch_ad(user_id)
+    return get_daily_ad_count(user_id) < DAILY_AD_LIMIT
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_USERNAME = "@freeearningofusdt"
