@@ -1,36 +1,17 @@
-
 services:
-  - type: web
-    name: ads-payout-web
-    runtime: python
+    - type: web
+    name: earni-bot
+    env: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
-    healthCheckPath: /health
     envVars:
-      - key: BOT_TOKEN
+            - key: BOT_TOKEN
         sync: false
-      - key: TELEGRAM_CHANNEL
-        value: "@freeearningofusdt"
-      - key: TELEGRAM_CHANNEL_URL
-        value: "https://t.me/freeearningofusdt"
-      - key: WEB_APP_URL
+            - key: MONGO_URL
         sync: false
-      - key: ADS_TEST_MODE
-        value: "true"
-      - key: FLASK_SECRET_KEY
-        generateValue: true
-
-  - type: worker
-    name: ads-payout-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
-    envVars:
-      - key: BOT_TOKEN
+            - key: BOT_USERNAME
         sync: false
-      - key: TELEGRAM_CHANNEL
-        value: "@freeearningofusdt"
-      - key: TELEGRAM_CHANNEL_URL
-        value: "https://t.me/freeearningofusdt"
-      - key: WEB_APP_URL
+            - key: MINI_APP_URL
         sync: false
+            - key: ADMIN_ID
+        value: 8323896060
