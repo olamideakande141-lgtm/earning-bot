@@ -1,199 +1,125 @@
-
-import os
-import uuid
-from flask import Flask
+import os, uuid
+from flask import Flask, request
 from threading import Thread
 from decimal import Decimal
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
-import asyncio
 
-# Your earning logic
 from earning import (
-    init_earning_tables, register_user, get_balance, 
-    credit_verified_ad, request_withdrawal,
-    DAILY_AD_LIMIT, AD_REWARD,
-    MIN_WITHDRAWAL, REFERRAL_REWARD, SUPPORTED_NETWORKS
+    init_earning_tables, register_user, get_balance,
+    get_daily_ad_count, can_watch_ad, credit_verified_ad,
+    DAILY_AD_LIMIT, AD_REWARD, MIN_WITHDRAWAL, REFERRAL_REWARD
 )
-import earning as earning_module
-
-def get_daily_ad_count(user_id):
-    # Try both possible names
-    if hasattr(earning_module, 'get_daily_ad_count'):
-        return earning_module.get_daily_ad_count(user_id)
-    if hasattr(earning_module, 'get_daily_counts'):
-        return earning_module.get_daily_counts(user_id)
-    return 0
-
-def can_watch_ad(user_id):
-    if hasattr(earning_module, 'can_watch_ad'):
-        return earning_module.can_watch_ad(user_id)
-    return get_daily_ad_count(user_id) < DAILY_AD_LIMIT
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_USERNAME = "@freeearningofusdt"
 CHANNEL_LINK = "https://t.me/freeearningofusdt"
+WEBAPP_URL = "https://earning-bot-bdjm.onrender.com"
 
 flask_app = Flask(__name__)
 
-# PREMIUM WEB DASHBOARD
 @flask_app.route('/')
 def home():
+    return f"<h1 style='text-align:center;margin-top:100px'>✅ USDT Earn Bot Running!<br><a href='{CHANNEL_LINK}'>{CHANNEL_USERNAME}</a></h1>"
+
+@flask_app.route('/ad')
+def ad_page():
+    user_id = request.args.get('user', '0')
+    event_id = str(uuid.uuid4())
     return f"""
-    <html>
-    <head><meta name="viewport" content="width=device-width, initial-scale=1">
+    <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
-        body{{background:#0a0a0a;color:#fff;font-family:Arial;text-align:center;padding:40px}}
-        .card{{background:linear-gradient(135deg,#1a1a1a,#2d2d2d);border:1px solid #d4af37;border-radius:20px;padding:30px;max-width:400px;margin:0 auto}}
-        .coin{{width:100px;height:100px;background:gold;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:30px;font-weight:bold;color:#000}}
-        h1{{color:#d4af37}} .bal{{color:#4ade80;font-size:28px}} 
-        .btn{{background:#d4af37;color:#000;padding:12px 25px;border-radius:10px;text-decoration:none;display:inline-block;margin-top:20px;font-weight:bold}}
+        body{{background:#0a0a0a;color:#fff;font-family:Arial;text-align:center;padding:20px}}
+        .card{{background:#1a1a1a;border:1px solid gold;border-radius:20px;padding:30px;max-width:400px;margin:30px auto}}
+        .timer{{font-size:50px;color:gold;margin:20px}} 
+        button{{background:gold;color:#000;padding:15px 30px;border:none;border-radius:10px;font-size:18px;font-weight:bold;width:100%;margin-top:15px}}
+        button:disabled{{background:#555;color:#888}}
     </style></head>
     <body>
         <div class="card">
-            <div class="coin">USDT</div>
-            <h1>USDT Earn Bot</h1>
-            <p>✅ Bot Is Running!</p>
-            <p>Channel: {CHANNEL_LINK}</p>
-            <p>💰 {AD_REWARD} USDT per ad<br>📺 {DAILY_AD_LIMIT} ads/day<br>👥 {REFERRAL_REWARD} USDT per referral</p>
-            <a class="btn" href="{CHANNEL_LINK}">Join Channel</a>
+            <h2>📺 Watch Ad</h2>
+            <p>Earn {AD_REWARD} USDT</p>
+            <div class="timer" id="timer">15</div>
+            <p id="status">Please wait... Ad playing</p>
+            <!-- AdsGalaxy Ad Container - will auto-fill after approval -->
+            <div id="ad-container" style="background:#222;height:250px;display:flex;align-items:center;justify-content:center;border-radius:10px;margin:15px 0">
+                <span>ADS GALAXY AD LOADS HERE</span>
+            </div>
+            <button id="claim" disabled>⏳ Wait 15s</button>
         </div>
-    </body>
-    </html>
+    <script>
+        let s=15; const t=document.getElementById('timer'), c=document.getElementById('claim'), st=document.getElementById('status');
+        let iv=setInterval(()=>{{ s--; t.textContent=s; if(s<=0){{ clearInterval(iv); st.textContent='✅ Ad Complete!'; c.textContent='💰 Claim {AD_REWARD} USDT'; c.disabled=false; c.style.background='#4ade80'; }} else{{ c.textContent='⏳ Wait '+s+'s'; }} }},1000);
+        c.onclick=()=>{{ fetch('/verify?user={user_id}&event_id={event_id}').then(r=>r.json()).then(d=>{{ if(d.ok){{ st.textContent='🎉 '+d.message; c.textContent='✅ Claimed! Return to Bot'; setTimeout(()=>window.close(),2000); }} else{{ st.textContent='❌ '+d.message; }} }}); }};
+    </script>
+    </body></html>
     """
 
-async def is_joined(user_id, context):
-    try:
-        m = await context.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return m.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED]
-    except:
-        return False
+@flask_app.route('/verify')
+def verify():
+    user_id = request.args.get('user')
+    event_id = request.args.get('event_id')
+    if not user_id or not event_id: return {"ok": False, "message": "Invalid"}
+    result = credit_verified_ad(int(user_id), event_id)
+    return result
 
-def premium_welcome_text(balance, count):
-    progress_bar = "🟩" * count + "⬜" * (DAILY_AD_LIMIT - count)
-    return (
-        f"🚀 *Welcome to USDT Earn Bot!*\n\n"
-        f"Earn USDT rewards by watching short ads and inviting friends\\.\n"
-        f"100% secure • Instant payouts • No deposits required\n\n"
-        f"💰 *Your Balance*\n"
-        f"`${balance} USDT` \n\n"
-        f"📊 *Daily Progress*\n"
-        f"Ads Watched: {count}/{DAILY_AD_LIMIT}\n"
-        f"{progress_bar}\n\n"
-        f"{DAILY_AD_LIMIT - count} ads remaining today"
-    )
+async def is_joined(uid, ctx):
+    try:
+        m = await ctx.bot.get_chat_member(CHANNEL_USERNAME, uid)
+        return m.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED]
+    except: return False
+
+def welcome_txt(bal, cnt):
+    bar = "🟩"*cnt + "⬜"*(DAILY_AD_LIMIT-cnt)
+    return f"🚀 *Welcome to USDT Earn Bot!*\\n\\nBalance: `${bal} USDT`\\nAds: {cnt}/{DAILY_AD_LIMIT}\\n{bar}\\n\\n{DAILY_AD_LIMIT-cnt} ads left today"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    ref = None
-    if context.args:
-        try: ref = int(context.args[0])
-        except: pass
-    
-    register_user(user_id, ref)
-    
-    if not await is_joined(user_id, context):
-        kb = [[InlineKeyboardButton("📢 Join Channel @freeearningofusdt", url=CHANNEL_LINK)],
-              [InlineKeyboardButton("✅ I Joined - Check", callback_data="check_join")]]
-        await update.message.reply_text(
-            f"⚠️ *Must Join Channel First!*\n\nTo use this bot, please join:\n{CHANNEL_LINK}",
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
-        )
-        return
-
-    balance = get_balance(user_id)
-    count = get_daily_ad_count(user_id)
-    
-    kb = [
-        [InlineKeyboardButton("💰 Balance", callback_data="balance"),
-         InlineKeyboardButton(f"📺 Watch Ad ({DAILY_AD_LIMIT}/day)", callback_data="watch_ad")],
-        [InlineKeyboardButton("👥 Refer", callback_data="refer"),
-         InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")]
+    uid = update.effective_user.id
+    ref = int(context.args[0]) if context.args and context.args[0].isdigit() else None
+    register_user(uid, ref)
+    if not await is_joined(uid, context):
+        kb=[[InlineKeyboardButton("📢 Join @freeearningofusdt", url=CHANNEL_LINK)],[InlineKeyboardButton("✅ Check Join", callback_data="check")]]
+        await update.message.reply_text(f"⚠️ Join {CHANNEL_LINK} first!", reply_markup=InlineKeyboardMarkup(kb)); return
+    bal=get_balance(uid); cnt=get_daily_ad_count(uid)
+    kb=[
+        [InlineKeyboardButton("💰 Balance", callback_data="bal"), InlineKeyboardButton(f"📺 Watch Ad ({cnt}/{DAILY_AD_LIMIT})", callback_data="ad")],
+        [InlineKeyboardButton("👥 Refer", callback_data="ref"), InlineKeyboardButton("💸 Withdraw", callback_data="wd")]
     ]
-    
-    await update.message.reply_text(
-        premium_welcome_text(balance, count),
-        reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
-    )
+    await update.message.reply_text(welcome_txt(bal,cnt), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    user_id = q.from_user.id
-    
-    if q.data == "check_join":
-        if not await is_joined(user_id, context):
-            await q.answer("❌ Not joined yet!", show_alert=True)
-            return
-        await q.edit_message_text("✅ Joined! Send /start again")
-        return
+async def btns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    if q.data=="check":
+        if not await is_joined(uid, context): await q.answer("❌ Not joined!", show_alert=True); return
+        await q.edit_message_text("✅ Joined! Send /start"); return
+    bal=get_balance(uid); cnt=get_daily_ad_count(uid)
+    if q.data=="bal":
+        await q.edit_message_text(f"💰 *Balance*\\n\\n`${bal} USDT`\\nEarned today: {cnt*AD_REWARD}\\nMin Withdraw: ${MIN_WITHDRAWAL}", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
+    elif q.data=="ad":
+        if not can_watch_ad(uid):
+            await q.edit_message_text(f"❌ Limit reached {cnt}/{DAILY_AD_LIMIT}\\nTomorrow!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]])); return
+        url=f"{WEBAPP_URL}/ad?user={uid}"
+        kb=[[InlineKeyboardButton("📺 Open Ad Page", web_app=WebAppInfo(url=url))],[InlineKeyboardButton("🔙 Back", callback_data="back")]]
+        await q.edit_message_text(f"📺 *Watch Ad to Earn {AD_REWARD} USDT*\\n\\nClick below, wait 15s, claim!\\nProgress: {cnt}/{DAILY_AD_LIMIT}", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    elif q.data=="ref":
+        link=f"https://t.me/{context.bot.username}?start={uid}"
+        await q.edit_message_text(f"👥 *Refer*\\n\\nYour link:\\n`{link}`\\nReward: ${REFERRAL_REWARD}", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
+    elif q.data=="wd":
+        await q.edit_message_text(f"💸 *Withdraw*\\n\\nBal: ${bal}\\nMin: ${MIN_WITHDRAWAL}\\n\\nFormat:\\n`/withdraw 5 TRC20 address`", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
+    elif q.data=="back":
+        kb=[
+            [InlineKeyboardButton("💰 Balance", callback_data="bal"), InlineKeyboardButton(f"📺 Watch Ad ({cnt}/{DAILY_AD_LIMIT})", callback_data="ad")],
+            [InlineKeyboardButton("👥 Refer", callback_data="ref"), InlineKeyboardButton("💸 Withdraw", callback_data="wd")]
+        ]
+        await q.edit_message_text(welcome_txt(bal,cnt), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-    balance = get_balance(user_id)
-    count = get_daily_ad_count(user_id)
-
-    if q.data == "balance":
-        await q.edit_message_text(
-            f"💰 *Balance Details*\n\n"
-            f"Current: `${balance} USDT`\n"
-            f"Today earned: `{count * AD_REWARD} USDT`\n"
-            f"Ads: {count}/{DAILY_AD_LIMIT}\n\n"
-            f"Min Withdraw: ${MIN_WITHDRAWAL}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]])
-        )
-    elif q.data == "watch_ad":
-        if not can_watch_ad(user_id):
-            await q.edit_message_text(f"❌ Limit reached! {DAILY_AD_LIMIT}/{DAILY_AD_LIMIT} today.\nCome back tomorrow!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
-            return
-        # Simulate verified ad for demo - replace with real ad provider callback
-        event_id = str(uuid.uuid4())
-        result = credit_verified_ad(user_id, event_id)
-        new_bal = get_balance(user_id)
-        new_count = get_daily_ad_count(user_id)
-        await q.edit_message_text(
-            f"✅ *Ad Watched!*\n\n+{AD_REWARD} USDT credited\nNew Balance: `${new_bal} USDT`\nProgress: {new_count}/{DAILY_AD_LIMIT}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📺 Watch Next", callback_data="watch_ad")],[InlineKeyboardButton("🔙 Menu", callback_data="back")]])
-        )
-    elif q.data == "refer":
-        link = f"https://t.me/{context.bot.username}?start={user_id}"
-        await q.edit_message_text(
-            f"👥 *Referral Program*\n\nYour Link:\n`{link}`\n\nReward: ${REFERRAL_REWARD} USDT per friend\n\nShare and earn!",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]])
-        )
-    elif q.data == "withdraw":
-        await q.edit_message_text(
-            f"💸 *Withdrawal*\n\nBalance: ${balance}\nMin: ${MIN_WITHDRAWAL}\nNetworks: {', '.join(SUPPORTED_NETWORKS)}\n\n"
-            f"Format:\n`/withdraw 5 TRC20 YourAddress`",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]])
-        )
-    elif q.data == "back":
-        await q.edit_message_text(
-            premium_welcome_text(balance, count),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💰 Balance", callback_data="balance"),
-                 InlineKeyboardButton(f"📺 Watch Ad ({DAILY_AD_LIMIT}/day)", callback_data="watch_ad")],
-                [InlineKeyboardButton("👥 Refer", callback_data="refer"),
-                 InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")]
-            ]), parse_mode="Markdown"
-        )
-
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-async def post_init(application):
-    init_earning_tables()
-    print("✅ Tables initialized")
-
+def run_flask(): flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+async def post_init(app): init_earning_tables()
 def main():
     Thread(target=run_flask, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app=Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(CallbackQueryHandler(btns))
     app.run_polling()
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
