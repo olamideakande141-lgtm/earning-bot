@@ -18,14 +18,23 @@ MAX_AUTH_AGE = 3600
 
 
 def verify_init_data(init_data):
-    """Validate Telegram Mini App initData server-side."""
+    """Validate Telegram Mini App authentication data."""
     if not BOT_TOKEN or not init_data:
         return None
 
     try:
-        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
-        received_hash = pairs.pop("hash", None)
+        pairs_list = parse_qsl(
+            init_data,
+            keep_blank_values=True,
+            strict_parsing=True
+        )
+        pairs = dict(pairs_list)
 
+        # Reject duplicate keys to avoid ambiguous authentication data.
+        if len(pairs) != len(pairs_list):
+            return None
+
+        received_hash = pairs.pop("hash", None)
         if not received_hash:
             return None
 
@@ -46,31 +55,38 @@ def verify_init_data(init_data):
             hashlib.sha256
         ).digest()
 
-        calculated_hash = hmac.new(
+        expected_hash = hmac.new(
             secret_key,
             data_check_string.encode(),
             hashlib.sha256
         ).hexdigest()
 
-        if not hmac.compare_digest(calculated_hash, received_hash):
+        if not hmac.compare_digest(expected_hash, received_hash):
             return None
 
         user = json.loads(pairs.get("user", "{}"))
-        user_id = user.get("id")
+        if not isinstance(user, dict):
+            return None
 
-        if not isinstance(user_id, int) or user_id <= 0:
+        user_id = user.get("id")
+        if type(user_id) is not int or user_id <= 0:
             return None
 
         return user
 
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError
+    ):
         return None
 
 
 def check_channel_membership(user_id):
-    """Return True only when Telegram confirms channel membership."""
+    """Fail closed unless Telegram confirms membership."""
     if not BOT_TOKEN:
-        return False
+        return False, "Bot token is not configured."
 
     try:
         response = requests.get(
@@ -82,24 +98,31 @@ def check_channel_membership(user_id):
             timeout=10
         )
         response.raise_for_status()
-        result = response.json()
+        data = response.json()
 
-        if not result.get("ok"):
-            return False
+        if not data.get("ok"):
+            print("Telegram membership API returned an error.")
+            return False, "Membership could not be verified. Try again."
 
-        member = result["result"]
+        member = data.get("result", {})
         status = member.get("status")
 
-        if status in ("creator", "administrator", "member"):
-            return True
+        allowed = status in ("creator", "administrator", "member")
 
-        return (
-            status == "restricted"
-            and member.get("is_member") is True
-        )
+        if status == "restricted":
+            allowed = member.get("is_member") is True
 
-    except (requests.RequestException, ValueError, KeyError):
-        return False
+        if allowed:
+            return True, None
+
+        return False, "Join our channel before continuing."
+
+    except requests.RequestException as exc:
+        print("Telegram membership request failed:", str(exc))
+        return False, "Membership verification is temporarily unavailable."
+
+    except (ValueError, TypeError):
+        return False, "Membership verification is temporarily unavailable."
 
 
 @earning_bp.route("/api/verify-membership", methods=["POST"])
@@ -113,15 +136,17 @@ def verify_membership():
         return jsonify({
             "ok": False,
             "member": False,
-            "error": "Invalid or expired Telegram session. Reopen the Mini App."
+            "message": "Invalid or expired Telegram session. Reopen the Mini App."
         }), 401
 
-    if not check_channel_membership(user["id"]):
+    member, error = check_channel_membership(user["id"])
+
+    if not member:
         return jsonify({
             "ok": True,
             "member": False,
             "channel_url": CHANNEL_URL,
-            "message": "Join our Telegram channel before continuing."
+            "message": error
         }), 403
 
     return jsonify({
@@ -132,3 +157,9 @@ def verify_membership():
             "first_name": user.get("first_name", "")
         }
     })
+
+
+@earning_bp.route("/api/health", methods=["GET"])
+def earning_health():
+    return jsonify({"status": "ok"})
+
