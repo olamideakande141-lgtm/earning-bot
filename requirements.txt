@@ -1,4 +1,4 @@
-python-telegram-bot==20.7
-Flask==3.0.0
-psycopg[binary]==3.2.3
 
+python-telegram-bot
+Flask
+psycopg[binary]
