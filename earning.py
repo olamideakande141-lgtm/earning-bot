@@ -1,74 +1,77 @@
-import time
+from pymongo import MongoClient
+from datetime import datetime, date
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-class EarningEngine:
-    _users_db = {}
-    _tasks = [
-        {"id": "t1", "title": "Watch Promotional Ad ($0.50)", "reward": 0.50},
-        {"id": "t2", "title": "Visit Partner Web Portal ($0.25)", "reward": 0.25},
-        {"id": "t3", "title": "Subscribe to Official Channel ($1.00)", "reward": 1.00}
-    ]
+MONGO_URL = os.getenv("MONGO_URL")
+client = MongoClient(MONGO_URL)
+db = client["earni_bot"]
 
-    @classmethod
-    def register_user(cls, user_id: str, username: str):
-        if user_id not in cls._users_db:
-            cls._users_db[user_id] = {
-                "username": username,
-                "balance": 1.00,
-                "last_daily": 0,
-                "completed_tasks": [],
-                "joined_timestamp": time.time()
-            }
+users = db["users"]
+earnings = db["earnings"]
+ads_daily = db["ads_daily"]
+withdraws = db["withdraws"]
 
-    @classmethod
-    def get_user_balance(cls, user_id: str) -> float:
-        user = cls._users_db.get(user_id)
-        return user["balance"] if user else 0.0
+def get_user(uid): 
+    return users.find_one({"user_id": uid})
 
-    @classmethod
-    def get_available_tasks(cls, user_id: str) -> list:
-        user = cls._users_db.get(user_id)
-        if not user:
-            return []
-        completed = user.get("completed_tasks", [])
-        return [t for t in cls._tasks if t["id"] not in completed]
+def create_user(user, ref=None):
+    if get_user(user.id): 
+        return get_user(user.id)
+    if ref and int(ref)==user.id: 
+        ref=None
+    doc = {
+        "user_id": user.id,
+        "first_name": user.first_name,
+        "username": user.username,
+        "balance": 0.0,
+        "ads_watched": 0,
+        "referrals": 0,
+        "total_earned_from_refs": 0.0,
+        "referred_by": int(ref) if ref else None,
+        "joined_at": datetime.utcnow()
+    }
+    users.insert_one(doc)
+    if ref:
+        r = get_user(int(ref))
+        if r:
+            users.update_one({"user_id": int(ref)}, {"$inc": {"balance": 0.025, "referrals": 1, "total_earned_from_refs": 0.025}})
+            earnings.insert_one({"user_id": int(ref), "type": "referral", "amount": 0.025, "description": f"Referral {user.first_name}", "created_at": datetime.utcnow()})
+    return get_user(user.id)
 
-    @classmethod
-    def complete_task(cls, user_id: str, task_id: str) -> float:
-        user = cls._users_db.get(user_id)
-        if not user:
-            return 0.0
-        
-        for task in cls._tasks:
-            if task["id"] == task_id and task_id not in user["completed_tasks"]:
-                user["balance"] += task["reward"]
-                user["completed_tasks"].append(task_id)
-                return task["reward"]
-        return 0.0
+def can_watch(uid):
+    today=str(date.today())
+    d=ads_daily.find_one({"user_id": uid, "date": today})
+    return (d["count"]<20, d["count"]) if d else (True,0)
 
-    @classmethod
-    def claim_daily_bonus(cls, user_id: str) -> tuple[bool, str]:
-        user = cls._users_db.get(user_id)
-        if not user:
-            return False, "User account record not found."
-            
-        current_time = time.time()
-        one_day_seconds = 86400
-        
-        if current_time - user["last_daily"] >= one_day_seconds:
-            bonus = 0.50
-            user["balance"] += bonus
-            user["last_daily"] = current_time
-            return True, f"🎉 Daily reward claimed! ${bonus:.2f} added to your account balance."
-        else:
-            remaining_hours = int((one_day_seconds - (current_time - user["last_daily"])) / 3600)
-            return False, f"⏳ Daily bonus already claimed. Please return in ~{remaining_hours} hours."
+def add_ad(uid):
+    today=str(date.today())
+    can,c=can_watch(uid)
+    if not can: 
+        return False
+    ads_daily.update_one({"user_id": uid, "date": today}, {"$inc": {"count": 1}, "$set": {"last": datetime.utcnow()}}, upsert=True)
+    users.update_one({"user_id": uid}, {"$inc": {"balance": 0.005, "ads_watched": 1}})
+    earnings.insert_one({"user_id": uid, "type": "ad", "amount": 0.005, "description": f"Ad {c+1}/20", "created_at": datetime.utcnow()})
+    return True
 
-    @classmethod
-    def get_global_stats(cls) -> dict:
-        total_users = len(cls._users_db)
-        total_payouts = sum(u["balance"] for u in cls._users_db.values())
-        return {
-            "total_users": total_users,
-            "total_payouts": round(total_payouts, 2),
-            "status": "Operational"
-        }
+def today_ads(uid):
+    d=ads_daily.find_one({"user_id": uid, "date": str(date.today())})
+    return d["count"] if d else 0
+
+def add_withdraw(uid, amount, wallet):
+    u=get_user(uid)
+    if not u or u["balance"]<amount: 
+        return None
+    doc={
+        "user_id": uid,
+        "amount": amount,
+        "fee": amount*0.20,
+        "receive": amount*0.80,
+        "wallet": wallet,
+        "status": "pending",
+        "created_at": datetime.utcnow()
+    }
+    res=withdraws.insert_one(doc)
+    doc["_id"]=res.inserted_id
+    return doc
