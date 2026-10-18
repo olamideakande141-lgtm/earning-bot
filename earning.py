@@ -23,7 +23,7 @@ REFERRAL_REWARD = 0.025
 MIN_WITHDRAWAL = 5.0
 WITHDRAWAL_FEE = 0.10
 
-# Test mode does not create withdrawable money.
+# Keep test mode enabled until real integrations are ready.
 TEST_MODE = os.environ.get("ADS_TEST_MODE", "true").lower() == "true"
 
 
@@ -75,6 +75,7 @@ def init_db():
 
 
 def verify_init_data(init_data):
+    """Validate Telegram Mini App initData on the server."""
     if not BOT_TOKEN or not init_data:
         return None
 
@@ -96,22 +97,31 @@ def verify_init_data(init_data):
             return None
 
         check_string = "\n".join(
-            f"{key}={value}" for key, value in sorted(pairs.items())
+            f"{key}={value}"
+            for key, value in sorted(pairs.items())
         )
 
         secret = hmac.new(
-            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
+            b"WebAppData",
+            BOT_TOKEN.encode(),
+            hashlib.sha256
         ).digest()
 
         expected = hmac.new(
-            secret, check_string.encode(), hashlib.sha256
+            secret,
+            check_string.encode(),
+            hashlib.sha256
         ).hexdigest()
 
         if not hmac.compare_digest(expected, received_hash):
             return None
 
         user = json.loads(pairs.get("user", "{}"))
-        if type(user.get("id")) is not int:
+
+        if not isinstance(user, dict):
+            return None
+
+        if type(user.get("id")) is not int or user["id"] <= 0:
             return None
 
         return user
@@ -120,35 +130,49 @@ def verify_init_data(init_data):
         return None
 
 
-def is_channel_member(user_id):
+def check_channel_membership(user_id):
+    """
+    Return (True, None) if membership is confirmed.
+    Return (False, message) if not a member or verification fails.
+    """
     if not BOT_TOKEN:
-        return False
+        return False, "BOT_TOKEN is not configured."
 
     try:
         response = requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
-            params={"chat_id": CHANNEL, "user_id": user_id},
+            params={
+                "chat_id": CHANNEL,
+                "user_id": user_id
+            },
             timeout=10
         )
         response.raise_for_status()
         data = response.json()
 
         if not data.get("ok"):
-            return False
+            return False, "Telegram could not verify membership."
 
-        member = data["result"]
+        member = data.get("result", {})
         status = member.get("status")
 
-        return (
-            status in ("creator", "administrator", "member")
-            or (
-                status == "restricted"
-                and member.get("is_member") is True
-            )
-        )
+        if status in ("creator", "administrator", "member"):
+            return True, None
 
-    except (requests.RequestException, ValueError, KeyError):
-        return False
+        if status == "restricted" and member.get("is_member") is True:
+            return True, None
+
+        return False, "Join @freeearningofusdt before continuing."
+
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        print("Membership verification failed:", exc)
+        return False, "Membership verification is temporarily unavailable."
+
+
+# Compatibility helper: existing code may expect a Boolean.
+def is_channel_member(user_id):
+    member, _ = check_channel_membership(user_id)
+    return member
 
 
 def require_user(func):
@@ -163,12 +187,14 @@ def require_user(func):
                 "message": "Invalid session. Reopen Ads Payout in Telegram."
             }), 401
 
-        if not is_channel_member(user["id"]):
+        member, error = check_channel_membership(user["id"])
+
+        if not member:
             return jsonify({
                 "ok": False,
                 "member": False,
                 "channel_url": CHANNEL_URL,
-                "message": "Join our Telegram channel to continue."
+                "message": error or "Join our Telegram channel to continue."
             }), 403
 
         g.telegram_user = user
@@ -183,6 +209,7 @@ def get_balance(db, user_id):
         "WHERE user_id = ?",
         (user_id,)
     ).fetchone()
+
     return round(row["total"], 8)
 
 
@@ -240,7 +267,8 @@ def dashboard():
         )
 
         user = db.execute(
-            "SELECT * FROM users WHERE user_id = ?", (uid,)
+            "SELECT * FROM users WHERE user_id = ?",
+            (uid,)
         ).fetchone()
 
         ads = db.execute(
@@ -288,6 +316,7 @@ def start_test_ad():
         }), 403
 
     import uuid
+
     uid = g.telegram_user["id"]
     session_id = str(uuid.uuid4())
 
@@ -303,7 +332,7 @@ def start_test_ad():
         "ok": True,
         "test_mode": True,
         "session_id": session_id,
-        "message": "This is a simulated test ad, not a real advertisement."
+        "message": "Simulated test ad only. No real earnings are created."
     })
 
 
@@ -321,7 +350,10 @@ def complete_test_ad():
     uid = g.telegram_user["id"]
 
     if not isinstance(session_id, str) or not session_id:
-        return jsonify({"ok": False, "message": "Missing test session."}), 400
+        return jsonify({
+            "ok": False,
+            "message": "Missing test session."
+        }), 400
 
     with connect_db() as db:
         session = db.execute(
@@ -345,8 +377,8 @@ def complete_test_ad():
         "ok": True,
         "test_mode": True,
         "message": (
-            "Test completed. No cash balance was credited. "
-            "A real provider must verify live ad completion."
+            "Test completed. No balance was credited. "
+            "Real rewards require verified provider callbacks."
         )
     })
 
@@ -368,87 +400,40 @@ def referrals():
                 "message": "Open the dashboard first."
             }), 400
 
+        bot_username = os.environ.get("BOT_USERNAME", "").lstrip("@")
+
+        link = None
+        if bot_username:
+            link = (
+                f"https://t.me/{bot_username}?start="
+                f"{user['referral_code']}"
+            )
+
         return jsonify({
             "ok": True,
             "referral_code": user["referral_code"],
-            "referral_link": (
-                "https://t.me/YOUR_BOT_USERNAME?start="
-                + user["referral_code"]
-            ),
+            "referral_link": link,
             "reward_usd": REFERRAL_REWARD,
-            "message": "Referral rewards require verified eligibility."
+            "message": (
+                "Referral rewards are not credited until referral "
+                "eligibility and first verified ad completion are implemented."
+            )
         })
 
 
 @earning_bp.route("/api/withdrawals", methods=["POST"])
 @require_user
 def request_withdrawal():
-    if TEST_MODE:
-        return jsonify({
-            "ok": False,
-            "message": "Withdrawals are disabled in test mode."
-        }), 403
-
-    payload = request.get_json(silent=True) or {}
-    uid = g.telegram_user["id"]
-
-    try:
-        amount = round(float(payload.get("amount", 0)), 8)
-    except (ValueError, TypeError):
-        return jsonify({"ok": False, "message": "Invalid amount."}), 400
-
-    network = payload.get("network")
-    address = payload.get("wallet_address", "")
-
-    if amount < MIN_WITHDRAWAL:
-        return jsonify({
-            "ok": False,
-            "message": "Minimum withdrawal is 5 USDT equivalent."
-        }), 400
-
-    if network not in ("TRC20", "ERC20"):
-        return jsonify({"ok": False, "message": "Invalid network."}), 400
-
-    if not isinstance(address, str) or not address.strip() or len(address) > 200:
-        return jsonify({"ok": False, "message": "Invalid wallet address."}), 400
-
-    fee = round(amount * WITHDRAWAL_FEE, 8)
-    net = round(amount - fee, 8)
-
-    with connect_db() as db:
-        balance = get_balance(db, uid)
-
-        pending = db.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS n FROM withdrawals "
-            "WHERE user_id = ? AND status IN ('pending', 'approved')",
-            (uid,)
-        ).fetchone()["n"]
-
-        if amount > balance - pending:
-            return jsonify({
-                "ok": False,
-                "message": "Insufficient available balance."
-            }), 400
-
-        db.execute(
-            """INSERT INTO withdrawals
-               (user_id, amount, fee, net_amount, network,
-                wallet_address, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                uid, amount, fee, net, network,
-                address.strip(), int(time.time())
-            )
-        )
-
+    # Keep withdrawals disabled until live funding and admin approval
+    # are implemented and tested.
     return jsonify({
-        "ok": True,
-        "status": "pending",
-        "requested": amount,
-        "fee": fee,
-        "estimated_net": net,
-        "message": "Request submitted for manual admin review."
-    })
+        "ok": False,
+        "message": (
+            "Withdrawals are currently disabled while Ads Payout "
+            "is in test mode."
+        )
+    }), 403
 
 
 init_db()
+
