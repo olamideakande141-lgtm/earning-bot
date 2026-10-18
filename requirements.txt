@@ -1,4 +1,5 @@
 
-python-telegram-bot
 Flask
-psycopg[binary]
+pyTelegramBotAPI
+requests
+gunicorn
