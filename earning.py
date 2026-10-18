@@ -3,10 +3,11 @@ from decimal import Decimal
 import psycopg
 from psycopg.rows import dict_row
 DATABASE_URL=os.environ.get("DATABASE_URL")
-LIMITS={"ad1":5,"ad2":7}
-REWARDS={"ad1":Decimal("0.01"),"ad2":Decimal("0.025")}
+LIMITS={"ad1":20,"ad2":20}
+REWARDS={"ad1":Decimal("0.0025"),"ad2":Decimal("0.0025")}
 REF=Decimal("0.25")
 MIN_WD=Decimal("3.00")
+TOTAL_DAILY_LIMIT=20
 def get_db():
     if not DATABASE_URL: raise RuntimeError("DATABASE_URL missing")
     return psycopg.connect(DATABASE_URL,row_factory=dict_row)
@@ -36,12 +37,12 @@ def get_daily_counts(user_id):
     return counts
 def credit_verified_ad(user_id,provider_event_id,ad_type):
     if ad_type not in REWARDS: return {"ok":False,"message":"Invalid"}
-    reward=REWARDS[ad_type]; limit=LIMITS[ad_type]
+    reward=REWARDS[ad_type]
     with get_db() as conn:
         u=conn.execute("SELECT user_id FROM earning_users WHERE user_id=%s FOR UPDATE",(int(user_id),)).fetchone()
         if not u: return {"ok":False,"message":"Not registered"}
-        cnt=conn.execute("SELECT COUNT(*) as c FROM ad_completions WHERE user_id=%s AND ad_type=%s AND completed_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",(int(user_id),ad_type)).fetchone()["c"]
-        if int(cnt)>=limit: return {"ok":False,"message":f"Limit {limit} reached"}
+        total=conn.execute("SELECT COUNT(*) as c FROM ad_completions WHERE user_id=%s AND completed_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",(int(user_id),)).fetchone()["c"]
+        if int(total)>=TOTAL_DAILY_LIMIT: return {"ok":False,"message":f"Daily limit {TOTAL_DAILY_LIMIT} reached"}
         ins=conn.execute("INSERT INTO ad_completions (user_id,provider_event_id,ad_type,reward) VALUES (%s,%s,%s,%s) ON CONFLICT (provider_event_id) DO NOTHING RETURNING id",(int(user_id),provider_event_id,ad_type,reward)).fetchone()
         if not ins: return {"ok":False,"message":"Already rewarded"}
         conn.execute("UPDATE earning_users SET balance=balance+%s WHERE user_id=%s",(reward,int(user_id)))
