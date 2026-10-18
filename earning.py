@@ -1,59 +1,134 @@
+
 import os
-from decimal import Decimal
-import psycopg
-from psycopg.rows import dict_row
-DATABASE_URL=os.environ.get("DATABASE_URL")
-LIMITS={"ad1":20,"ad2":20}
-REWARDS={"ad1":Decimal("0.0025"),"ad2":Decimal("0.0025")}
-REF=Decimal("0.25")
-MIN_WD=Decimal("3.00")
-TOTAL_DAILY_LIMIT=20
-def get_db():
-    if not DATABASE_URL: raise RuntimeError("DATABASE_URL missing")
-    return psycopg.connect(DATABASE_URL,row_factory=dict_row)
-def init_earning_tables():
-    with get_db() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS earning_users (user_id BIGINT PRIMARY KEY, balance NUMERIC(18,8) DEFAULT 0, referred_by BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
-        conn.execute("CREATE TABLE IF NOT EXISTS ad_completions (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES earning_users(user_id), provider_event_id TEXT UNIQUE NOT NULL, ad_type TEXT NOT NULL, reward NUMERIC(18,8) NOT NULL, completed_at TIMESTAMPTZ DEFAULT NOW())")
-        conn.execute("CREATE TABLE IF NOT EXISTS withdrawal_requests (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES earning_users(user_id), amount NUMERIC(18,8) NOT NULL, network TEXT NOT NULL, wallet_address TEXT NOT NULL, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT NOW())")
-def register_user(user_id,referred_by=None):
-    user_id=int(user_id)
-    with get_db() as conn:
-        conn.execute("INSERT INTO earning_users (user_id) VALUES (%s) ON CONFLICT DO NOTHING",(user_id,))
-        if referred_by and int(referred_by)!=user_id:
-            r=conn.execute("SELECT referred_by FROM earning_users WHERE user_id=%s",(user_id,)).fetchone()
-            if r and r["referred_by"] is None:
-                conn.execute("UPDATE earning_users SET referred_by=%s WHERE user_id=%s",(int(referred_by),user_id))
-                conn.execute("UPDATE earning_users SET balance=balance+%s WHERE user_id=%s",(REF,int(referred_by)))
-def get_balance(user_id):
-    with get_db() as conn:
-        row=conn.execute("SELECT balance FROM earning_users WHERE user_id=%s",(int(user_id),)).fetchone()
-    return Decimal(row["balance"]) if row else Decimal("0")
-def get_daily_counts(user_id):
-    with get_db() as conn:
-        rows=conn.execute("SELECT ad_type, COUNT(*) as c FROM ad_completions WHERE user_id=%s AND completed_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' GROUP BY ad_type",(int(user_id),)).fetchall()
-    counts={"ad1":0,"ad2":0}
-    for x in rows: counts[x["ad_type"]]=int(x["c"])
-    return counts
-def credit_verified_ad(user_id,provider_event_id,ad_type):
-    if ad_type not in REWARDS: return {"ok":False,"message":"Invalid"}
-    reward=REWARDS[ad_type]
-    with get_db() as conn:
-        u=conn.execute("SELECT user_id FROM earning_users WHERE user_id=%s FOR UPDATE",(int(user_id),)).fetchone()
-        if not u: return {"ok":False,"message":"Not registered"}
-        total=conn.execute("SELECT COUNT(*) as c FROM ad_completions WHERE user_id=%s AND completed_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",(int(user_id),)).fetchone()["c"]
-        if int(total)>=TOTAL_DAILY_LIMIT: return {"ok":False,"message":f"Daily limit {TOTAL_DAILY_LIMIT} reached"}
-        ins=conn.execute("INSERT INTO ad_completions (user_id,provider_event_id,ad_type,reward) VALUES (%s,%s,%s,%s) ON CONFLICT (provider_event_id) DO NOTHING RETURNING id",(int(user_id),provider_event_id,ad_type,reward)).fetchone()
-        if not ins: return {"ok":False,"message":"Already rewarded"}
-        conn.execute("UPDATE earning_users SET balance=balance+%s WHERE user_id=%s",(reward,int(user_id)))
-    return {"ok":True,"reward":str(reward)}
-def request_withdrawal(user_id,amount,network,wallet_address):
-    amount=Decimal(str(amount))
-    with get_db() as conn:
-        row=conn.execute("SELECT balance FROM earning_users WHERE user_id=%s FOR UPDATE",(int(user_id),)).fetchone()
-        if not row: return {"ok":False,"message":"Not registered"}
-        if Decimal(row["balance"])<amount: return {"ok":False,"message":"Insufficient"}
-        if amount<MIN_WD: return {"ok":False,"message":f"Min {MIN_WD}"}
-        conn.execute("UPDATE earning_users SET balance=balance-%s WHERE user_id=%s",(amount,int(user_id)))
-        conn.execute("INSERT INTO withdrawal_requests (user_id,amount,network,wallet_address) VALUES (%s,%s,%s,%s)",(int(user_id),amount,network,wallet_address))
-    return {"ok":True}
+import time
+import hmac
+import hashlib
+import json
+from urllib.parse import parse_qsl
+
+import requests
+from flask import Blueprint, request, jsonify
+
+earning_bp = Blueprint("earning", __name__)
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHANNEL = "@freeearningofusdt"
+CHANNEL_URL = "https://t.me/freeearningofusdt"
+MAX_AUTH_AGE = 3600
+
+
+def verify_init_data(init_data):
+    """Validate Telegram Mini App initData server-side."""
+    if not BOT_TOKEN or not init_data:
+        return None
+
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = pairs.pop("hash", None)
+
+        if not received_hash:
+            return None
+
+        auth_date = int(pairs.get("auth_date", "0"))
+        now = int(time.time())
+
+        if auth_date > now + 60 or now - auth_date > MAX_AUTH_AGE:
+            return None
+
+        data_check_string = "\n".join(
+            f"{key}={value}"
+            for key, value in sorted(pairs.items())
+        )
+
+        secret_key = hmac.new(
+            b"WebAppData",
+            BOT_TOKEN.encode(),
+            hashlib.sha256
+        ).digest()
+
+        calculated_hash = hmac.new(
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            return None
+
+        user = json.loads(pairs.get("user", "{}"))
+        user_id = user.get("id")
+
+        if not isinstance(user_id, int) or user_id <= 0:
+            return None
+
+        return user
+
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def check_channel_membership(user_id):
+    """Return True only when Telegram confirms channel membership."""
+    if not BOT_TOKEN:
+        return False
+
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
+            params={
+                "chat_id": CHANNEL,
+                "user_id": user_id
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get("ok"):
+            return False
+
+        member = result["result"]
+        status = member.get("status")
+
+        if status in ("creator", "administrator", "member"):
+            return True
+
+        return (
+            status == "restricted"
+            and member.get("is_member") is True
+        )
+
+    except (requests.RequestException, ValueError, KeyError):
+        return False
+
+
+@earning_bp.route("/api/verify-membership", methods=["POST"])
+def verify_membership():
+    data = request.get_json(silent=True) or {}
+    init_data = data.get("initData", "")
+
+    user = verify_init_data(init_data)
+
+    if not user:
+        return jsonify({
+            "ok": False,
+            "member": False,
+            "error": "Invalid or expired Telegram session. Reopen the Mini App."
+        }), 401
+
+    if not check_channel_membership(user["id"]):
+        return jsonify({
+            "ok": True,
+            "member": False,
+            "channel_url": CHANNEL_URL,
+            "message": "Join our Telegram channel before continuing."
+        }), 403
+
+    return jsonify({
+        "ok": True,
+        "member": True,
+        "user": {
+            "id": user["id"],
+            "first_name": user.get("first_name", "")
+        }
+    })
