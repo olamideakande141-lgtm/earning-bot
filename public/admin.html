@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Admin - Ads Payout</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-[#0A0C16] text-white p-6">
+<h1 class="text-2xl font-bold">Ads Payout - Admin</h1>
+<p class="text-sm text-gray-400">Manual Tasks + Manual BEP20 Payouts</p>
+<div class="mt-6 bg-[#151927] border rounded-xl p-4">
+<h3 class="font-bold">➕ Add Task</h3>
+<input id="adminSecret" placeholder="Admin Secret" class="w-full mt-3 bg-black border rounded p-2 text-sm">
+<input id="taskTitle" placeholder="Title" class="w-full mt-2 bg-black border rounded p-2 text-sm">
+<input id="taskReward" placeholder="Reward 0.01" type="number" step="0.001" class="w-full mt-2 bg-black border rounded p-2 text-sm">
+<input id="taskLink" placeholder="Link" class="w-full mt-2 bg-black border rounded p-2 text-sm">
+<input id="taskType" placeholder="Type" class="w-full mt-2 bg-black border rounded p-2 text-sm">
+<button onclick="addTask()" class="w-full mt-3 bg-purple-600 rounded py-2 font-bold">Add Task</button>
+<p id="taskStatus" class="text-xs mt-2"></p>
+</div>
+<div class="mt-6 bg-[#151927] border rounded-xl p-4"><h3 class="font-bold">📋 Tasks</h3><div id="tasksList" class="mt-3 space-y-2"></div></div>
+<div class="mt-6 bg-[#151927] border rounded-xl p-4"><h3 class="font-bold">💸 Withdrawals Manual</h3><button onclick="loadWithdraws()" class="mt-2 bg-orange-500 rounded px-4 py-2 text-sm">Refresh</button><div id="withdrawList" class="mt-3 space-y-3 text-xs"></div></div>
+<script>
+async function addTask(){
+  const secret=document.getElementById('adminSecret').value;
+  const title=document.getElementById('taskTitle').value;
+  const reward=document.getElementById('taskReward').value;
+  const link=document.getElementById('taskLink').value;
+  const type=document.getElementById('taskType').value;
+  const r=await fetch('/api/admin/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,reward,link,type,secret})});
+  const d=await r.json(); document.getElementById('taskStatus').innerText=d.ok?"Added!":"Failed"; loadTasks();
+}
+async function loadTasks(){ const r=await fetch('/api/admin/tasks'); const t=await r.json(); document.getElementById('tasksList').innerHTML=t.map(x=>`<div class="flex justify-between bg-black p-2 rounded">${x.title} $${x.reward} <button onclick="deleteTask(${x.id})" class="text-red-400">Del</button></div>`).join(''); }
+async function deleteTask(id){ const secret=document.getElementById('adminSecret').value; await fetch('/api/admin/tasks/'+id,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret})}); loadTasks(); }
+async function loadWithdraws(){
+  const secret=document.getElementById('adminSecret').value;
+  const r=await fetch('/api/admin/withdrawals?secret='+secret); const list=await r.json();
+  if(!Array.isArray(list)){ document.getElementById('withdrawList').innerHTML="Wrong secret"; return; }
+  document.getElementById('withdrawList').innerHTML=list.map(w=>`<div class="bg-black p-3 rounded"><p>User:${w.userId} | ${w.cryptoType} | ${w.wallet}</p><p>Payout:$${w.payout.toFixed(4)} Status:${w.status}</p>${w.status=='pending'?`<button onclick="approve(${w.id})" class="bg-green-600 px-3 py-1 rounded mt-2">Mark Paid</button>`:''}</div>`).join('') || "No withdrawals";
+}
+async function approve(id){ const secret=document.getElementById('adminSecret').value; await fetch('/api/admin/withdrawals/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,secret})}); loadWithdraws(); }
+loadTasks();
+</script>
+</body>
+</html>
