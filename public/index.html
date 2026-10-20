@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ads Payout</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body{background:#0A0C16;color:#fff} .card{background:#151927;border:1px solid #252A40} .purple-gradient{background:linear-gradient(135deg,#7C3AED,#A855F7)} .orange-gradient{background:linear-gradient(135deg,#F97316,#FB923C)}</style>
+</head>
+<body class="pb-24">
+<div id="forceJoin" class="fixed inset-0 z-[100] bg-[#0A0C16]/95 flex items-center justify-center p-6">
+<div class="card rounded-[24px] p-6 w-full max-w-sm text-center">
+<h2 class="text-xl font-bold">Join to use Ads Payout</h2>
+<p class="text-sm text-gray-400 mt-2">Must join @freeearningofusdt</p>
+<a href="https://t.me/freeearningofusdt" target="_blank" class="block purple-gradient rounded-xl py-3 font-bold mt-6">Join @freeearningofusdt</a>
+<button onclick="checkJoined()" class="w-full orange-gradient rounded-xl py-3 font-bold mt-3">✅ Check - I Joined</button>
+</div>
+</div>
+<div class="p-4 flex justify-between"><div class="font-bold">Ads Payout</div><div>⋯</div></div>
+<div class="mx-4 card rounded-[20px] p-5">
+<p class="text-xs text-gray-400">YOUR USDT</p>
+<h1 id="balance" class="text-3xl font-extrabold">0.0000</h1>
+<div class="flex gap-3 mt-4">
+<button onclick="switchTab('earn')" class="flex-1 purple-gradient rounded-xl py-3 font-bold text-sm">⚡ Earn</button>
+<button onclick="openWithdraw()" class="flex-1 bg-[#1E2235] rounded-xl py-3 font-bold text-sm">💼 Withdraw</button>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-3 mx-4 mt-4">
+<div class="card rounded-2xl p-3 text-center"><p class="text-xs text-gray-400">Tasks</p><p id="tasksCount" class="font-bold">0</p></div>
+<div class="card rounded-2xl p-3 text-center"><p class="text-xs text-gray-400">Refs</p><p id="refsCount" class="font-bold">0</p></div>
+<div class="card rounded-2xl p-3 text-center"><p class="text-xs text-gray-400">Earn</p><p class="font-bold">$0.025/ref</p></div>
+</div>
+<div id="homeTab" class="mx-4 mt-6">
+<h3 class="font-bold">💰 AdsGalaxy Ads</h3>
+<div class="card rounded-2xl p-4 mt-3 flex justify-between"><div><p class="font-bold text-sm">WATCH AD</p><p class="text-xs text-green-400">0.002 USDT</p></div><button onclick="watchGalaxyAd()" class="bg-blue-500 rounded-full px-5 py-2 text-xs font-bold">Watch</button></div>
+<div class="card rounded-2xl p-4 mt-3 flex justify-between"><div><p class="font-bold text-sm">CLAIM BONUS</p><p class="text-xs text-green-400">0.010 USDT</p></div><button onclick="doEarn(0.01)" class="orange-gradient rounded-full px-5 py-2 text-xs font-bold">Claim</button></div>
+</div>
+<div id="earnTab" class="mx-4 mt-6 hidden"><h3 class="font-bold">Tasks</h3><div id="tasksList" class="mt-3 space-y-3"></div></div>
+<div id="referTab" class="mx-4 mt-6 hidden">
+<div class="orange-gradient rounded-2xl p-5"><p class="font-bold">Invite & Earn $0.025 per referral</p></div>
+<div class="grid grid-cols-2 gap-3 mt-3"><div class="card rounded-2xl p-4"><p class="text-xs text-gray-400">Total</p><p id="refTotal" class="text-xl font-bold">0</p></div><div class="card rounded-2xl p-4"><p class="text-xs text-gray-400">Earned</p><p id="refEarned" class="text-xl font-bold text-green-400">$0.00</p></div></div>
+<div class="card rounded-2xl p-4 mt-3"><input id="refLink" class="w-full bg-black rounded-lg p-2 text-xs" readonly><button onclick="copyRef()" class="mt-2 bg-white text-black px-3 rounded-lg text-xs font-bold py-2 w-full">Copy Link</button></div>
+</div>
+<div id="withdrawModal" class="fixed inset-0 z-50 bg-black/80 hidden items-center justify-center p-6">
+<div class="card rounded-2xl p-6 w-full max-w-sm">
+<h3 class="font-bold">Withdraw - Manual BEP20</h3><p class="text-xs text-gray-400">Min $5 - Fee 20% - Manual</p>
+<p class="text-sm mt-4">Balance: <span id="wBalance" class="font-bold text-green-400">$0.00</span></p><p id="wCalc" class="text-xs text-gray-400"></p>
+<select id="cryptoSelect" class="w-full mt-4 bg-black border rounded-xl p-3 text-sm">
+<option value="USDT-BEP20">USDT BEP20 (BSC)</option>
+<option value="USDT-TRC20">USDT TRC20</option>
+<option value="BTC">BTC</option>
+<option value="ETH">ETH</option>
+<option value="BNB">BNB</option>
+<option value="TON">TON</option>
+<option value="SOL">SOL</option>
+<option value="TRX">TRX</option>
+</select>
+<p class="text-[10px] text-red-400 mt-1">LTC & DOGE NOT allowed</p>
+<input id="walletInput" placeholder="Wallet Address" class="w-full mt-2 bg-black border rounded-xl p-3 text-sm">
+<button onclick="doWithdraw()" class="w-full mt-4 orange-gradient rounded-xl py-3 font-bold">Request Manual Withdraw</button>
+<button onclick="closeWithdraw()" class="w-full mt-2 bg-[#1E2235] rounded-xl py-3 font-bold text-sm">Cancel</button>
+<p id="wStatus" class="text-xs mt-3 text-center"></p>
+</div>
+</div>
+<div class="fixed bottom-0 left-0 right-0 bg-[#0F1220] border-t flex justify-around py-3">
+<button onclick="switchTab('home')">🏠</button>
+<button onclick="switchTab('earn')">📋</button>
+<button onclick="switchTab('refer')">👥</button>
+<button onclick="openWithdraw()">💼</button>
+</div>
+<script>
+let userId=null;
+function init(){
+  const tg=window.Telegram.WebApp; tg.ready(); tg.expand();
+  userId=tg.initDataUnsafe?.user?.id || new URLSearchParams(location.search).get('userId') || '12345';
+  const sp=tg.initDataUnsafe?.start_param;
+  if(sp) fetch('/api/referral',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId, refId: sp})});
+  checkJoined(); loadUser(); loadTasks();
+}
+async function checkJoined(){ const r=await fetch(`/api/check-joined?userId=${userId}`); const d=await r.json(); document.getElementById('forceJoin').style.display=d.joined?'none':'flex'; }
+async function loadUser(){
+  const r=await fetch(`/api/user?userId=${userId}`); const d=await r.json();
+  document.getElementById('balance').innerText=d.balance.toFixed(4);
+  document.getElementById('tasksCount').innerText=d.tasks;
+  document.getElementById('refsCount').innerText=d.referralCount;
+  document.getElementById('refTotal').innerText=d.referralCount;
+  document.getElementById('refEarned').innerText=`$${(d.referralCount*0.025).toFixed(3)}`;
+  document.getElementById('refLink').value=d.referralLink;
+  document.getElementById('wBalance').innerText=`$${d.balance.toFixed(4)}`;
+  const fee=d.balance*0.2;
+  document.getElementById('wCalc').innerText=`You get $${(d.balance-fee).toFixed(4)} Fee $${fee.toFixed(4)}`;
+}
+async function loadTasks(){ const r=await fetch('/api/tasks'); const list=await r.json(); document.getElementById('tasksList').innerHTML=list.map(t=>`<div class="card rounded-2xl p-4 flex justify-between"><div><p class="font-bold text-sm">${t.title}</p><p class="text-xs text-green-400">${t.reward} USDT</p></div><button onclick="doEarn(${t.reward})" class="bg-white text-black rounded-full px-4 py-2 text-xs">Start</button></div>`).join(''); }
+async function doEarn(a){ await fetch('/api/earn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId, amount:a})}); loadUser(); }
+function watchGalaxyAd(){ alert("Watch ad from AdsGalaxy - balance auto updates"); setTimeout(loadUser,6000); }
+function switchTab(t){ document.getElementById('homeTab').classList.add('hidden'); document.getElementById('earnTab').classList.add('hidden'); document.getElementById('referTab').classList.add('hidden'); document.getElementById(t+'Tab').classList.remove('hidden'); }
+function openWithdraw(){ document.getElementById('withdrawModal').classList.remove('hidden'); document.getElementById('withdrawModal').classList.add('flex'); loadUser(); }
+function closeWithdraw(){ document.getElementById('withdrawModal').classList.add('hidden'); }
+async function doWithdraw(){ const wallet=document.getElementById('walletInput').value; const cryptoType=document.getElementById('cryptoSelect').value; const r=await fetch('/api/withdraw',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,wallet,cryptoType})}); const d=await r.json(); document.getElementById('wStatus').innerText=d.msg; if(d.ok) loadUser(); }
+function copyRef(){ navigator.clipboard.writeText(document.getElementById('refLink').value); alert("Copied!"); }
+window.onload=init;
+</script>
+</body>
+</html>
